@@ -1701,12 +1701,14 @@ vr_dpdk_set_vhost_send_func(unsigned int vif_idx, uint32_t mrg)
 static inline void
 dpdk_virtio_send_burst(struct dpdk_virtio_writer *p)
 {
+#if 0
     uint32_t nb_tx = 0;
 
-    if (likely(p->tx_virtioq->vdv_send_func != NULL)) {
+    if (p->tx_virtioq->vdv_send_func != NULL) {
         nb_tx = p->tx_virtioq->vdv_send_func(p, p->tx_virtioq,
                         p->tx_buf, p->tx_buf_count);
     }
+#endif
 
     DPDK_VIRTIO_WRITER_STATS_PKTS_DROP_ADD(p, p->tx_buf_count - nb_tx);
     /* dpdk_virtio_dev_to_vm_tx_burst() does not free any mbufs */

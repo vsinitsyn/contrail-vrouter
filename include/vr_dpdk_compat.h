@@ -50,4 +50,12 @@
 
 #endif /* RTE_VERSION */
 
+#ifndef PKT_RX_GSO_TCP4
+#define PKT_RX_GSO_TCP4 1
+#endif
+
+#ifndef PKT_RX_GSO_TCP6
+#define PKT_RX_GSO_TCP6 2
+#endif
+
 #endif /* __VRDPDKCOMPAT_H__ */
