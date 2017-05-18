@@ -14,6 +14,7 @@
 #include <linux/if_arp.h>
 #include <linux/ip.h>
 #include <linux/jhash.h>
+#include <linux/pkt_sched.h>
 
 #if (LINUX_VERSION_CODE < KERNEL_VERSION(2,6,39))
 #include <linux/if_bridge.h>
@@ -306,7 +307,7 @@ linux_inet_fragment(struct vr_interface *vif, struct sk_buff *skb,
      *
      * and hence access to packet structure beyond this point is suicidal
      */
-    memset(skb->cb, 0, sizeof(struct vrouter_gso_cb));
+    memset(skb->cb, 0, sizeof(skb->cb));
     segs = skb_segment(skb, features);
     if (IS_ERR(segs))
         return PTR_ERR(segs);
@@ -349,11 +350,14 @@ linux_xmit_segment(struct vr_interface *vif, struct sk_buff *seg,
         unsigned short type, int diag)
 {
     int err = -ENOMEM;
+    unsigned short iphlen, ethlen;
+    unsigned short eth_proto, reason = 0;
+    unsigned int num_vlan_hdrs = 0;
+
+    struct vr_eth *eth;
+    struct vr_vlan_hdr *vlan;
     struct vr_ip *iph, *i_iph = NULL;
-    unsigned short iphlen;
-    unsigned short ethlen;
     struct udphdr *udph;
-    unsigned short reason = 0;
 
     /* we will do tunnel header updates after the fragmentation */
     if (seg->len > seg->dev->mtu + seg->dev->hard_header_len
@@ -370,6 +374,27 @@ linux_xmit_segment(struct vr_interface *vif, struct sk_buff *seg,
     if (!pskb_may_pull(seg, ethlen + sizeof(struct vr_ip))) {
         reason = VP_DROP_PULL;
         goto exit_xmit;
+    }
+
+    if (ethlen) {
+        eth = (struct vr_eth *)(seg->data);
+        eth_proto = eth->eth_proto;
+        while (eth_proto == htons(VR_ETH_PROTO_VLAN)) {
+            if (num_vlan_hdrs > 3) {
+                reason = VP_DROP_INVALID_PROTOCOL;
+                goto exit_xmit;
+            }
+
+            num_vlan_hdrs++;
+            vlan = (struct vr_vlan_hdr *)(seg->data + ethlen);
+            eth_proto = vlan->vlan_proto;
+            ethlen += sizeof(struct vr_vlan_hdr);
+        }
+
+        if (!pskb_may_pull(seg, ethlen + sizeof(struct vr_ip))) {
+            reason = VP_DROP_PULL;
+            goto exit_xmit;
+        }
     }
 
     iph = (struct vr_ip *)(seg->data + ethlen);
@@ -798,8 +823,16 @@ linux_if_tx(struct vr_interface *vif, struct vr_packet *pkt)
     if (pkt->vp_queue != VP_QUEUE_INVALID)
         skb->queue_mapping = pkt->vp_queue + 1;
 
-    if (pkt->vp_priority != VP_PRIORITY_INVALID)
-        skb->priority = pkt->vp_priority;
+    if (!vif_is_fabric(vif) ||
+            (vr_priority_tagging || is_vlan_dev(dev))) {
+        if (pkt->vp_priority != VP_PRIORITY_INVALID) {
+            skb->priority = pkt->vp_priority;
+        } else {
+            skb->priority = TC_PRIO_BESTEFFORT;
+        }
+    } else {
+        skb->priority = TC_PRIO_CONTROL;
+    }
 
     /*
      * Set the network header and trasport header of skb only if the type is
@@ -1988,12 +2021,16 @@ int
 lh_gro_process(struct vr_packet *pkt, struct vr_interface *vif, bool l2_pkt)
 {
     int handled = 1;
+
     struct sk_buff *skb = vp_os_packet(pkt);
 #ifdef XEN_HYPERVISOR
     unsigned char *data;
     if (l2_pkt)
         return !handled;
 #endif
+
+    if (skb_cloned(skb))
+        return !handled;
 
     skb->data = pkt_data(pkt);
     skb->len = pkt_len(pkt);
@@ -2042,14 +2079,16 @@ static rx_handler_result_t
 pkt_gro_dev_rx_handler(struct sk_buff **pskb)
 {
     unsigned short nh_id, vif_id, drop_reason;
-    struct vr_nexthop *nh;
-    struct vr_interface *vif;
-    struct vr_interface *gro_vif;
-    struct vr_interface_stats *gro_vif_stats;
-    struct sk_buff *skb = *pskb;
-    struct vr_packet *pkt = NULL;
+
     struct vrouter *router = vrouter_get(0);
+    struct vr_gro *gro;
+    struct vr_nexthop *nh;
+    struct vr_interface *vif, *gro_vif;
+    struct vr_interface_stats *gro_vif_stats;
+    struct vr_packet *pkt = NULL;
     struct vr_forwarding_md fmd;
+    struct sk_buff *skb = *pskb;
+
 #ifdef XEN_HYPERVISOR
     unsigned char *data;
 
@@ -2060,8 +2099,9 @@ pkt_gro_dev_rx_handler(struct sk_buff **pskb)
         goto drop;
     }
 #else
-    vif_id = *((unsigned short *)skb_mac_header(skb));
-    nh_id = *((unsigned short *)(skb_mac_header(skb) + sizeof(vif_id)));
+    gro = (struct vr_gro *)skb_mac_header(skb);
+    vif_id = gro->vg_vif_id;
+    nh_id = gro->vg_nh_id;
 #endif
 
     gro_vif = skb->dev->ml_priv;

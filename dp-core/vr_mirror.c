@@ -394,7 +394,7 @@ vr_mirror(struct vrouter *router, uint8_t mirror_id, struct vr_packet *pkt,
 
     /* Set the GSO and partial checksum flag */
     pkt->vp_flags |= (VP_FLAG_FLOW_SET | VP_FLAG_GSO);
-    pkt->vp_flags &= ~VP_FLAG_GRO;
+    vr_pkt_unset_gro(pkt);
 
     if (mirror->mir_flags & VR_MIRROR_FLAG_DYNAMIC) {
 
@@ -460,8 +460,8 @@ vr_mirror(struct vrouter *router, uint8_t mirror_id, struct vr_packet *pkt,
 
                 clone_len = 0;
 
-                if (!pkt_nh->nh_dev->vif_set_rewrite(pkt_nh->nh_dev, pkt, fmd,
-                                    pkt_nh->nh_data, pkt_nh->nh_encap_len)) {
+                if (pkt_nh->nh_dev->vif_set_rewrite(pkt_nh->nh_dev, pkt, fmd,
+                                    pkt_nh->nh_data, pkt_nh->nh_encap_len) < 0) {
                     drop_reason = VP_DROP_REWRITE_FAIL;
                     goto fail;
                 }

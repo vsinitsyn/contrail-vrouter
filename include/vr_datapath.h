@@ -8,6 +8,11 @@
 
 #include "vr_packet.h"
 
+struct vr_gro {
+    uint16_t vg_vif_id;
+    uint16_t vg_nh_id;
+} __attribute__((packed));
+
 static inline bool
 well_known_mac(unsigned char *dmac)
 {
@@ -21,9 +26,10 @@ well_known_mac(unsigned char *dmac)
 }
 
 unsigned int vr_virtual_input(unsigned short, struct vr_interface *,
-                              struct vr_packet *, unsigned short);
+                              struct vr_packet *, struct vr_forwarding_md *,
+                              unsigned short);
 unsigned int vr_fabric_input(struct vr_interface *, struct vr_packet *,
-                             unsigned short);
+                             struct vr_forwarding_md *, unsigned short);
 
 int vr_l3_input(struct vr_packet *, struct vr_forwarding_md *);
 int vr_l2_input(struct vr_packet *, struct vr_forwarding_md *);
